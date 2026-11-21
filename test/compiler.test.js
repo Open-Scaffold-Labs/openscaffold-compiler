@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   defineScaffold,
   defineEntity,
@@ -12,7 +16,14 @@ import {
   emitSwiftAppIntents,
   emitKotlinAppFunctions,
   compileScaffold,
+  createActionRuntime,
 } from '../src/index.js';
+import {
+  buildStarterScaffoldObject,
+  discoverTargetRepos,
+  installCompilerIntoRepo,
+  runFleetRolloutCli,
+} from '../bin/rollout-compiler-fleet.mjs';
 
 function createFixtureScaffold() {
   return defineScaffold({
@@ -38,7 +49,7 @@ function createFixtureScaffold() {
       defineAction({
         id: 'restaurant.reserve_table',
         title: 'Reserve Dining Table',
-        summary: 'Books a guest reservation with 0% platform commission.',
+        summary: 'Books a guest reservation with 0 bps platform commission.',
         description: 'Reserves a dining table for 1 to 12 guests.',
         tags: ['booking', 'dining'],
         examples: ['Book a table for 4 Friday at 7 PM under Alex Rivera.'],
@@ -164,13 +175,11 @@ test('validateContracts enforces Steward-Coop Charter, RBAC isolation, commit mo
   const valid = createFixtureScaffold();
   assert.deepEqual(validateContracts(valid), { valid: true, actionCount: 3 });
 
-  // Rejects marketplace commissions
   assert.throws(
     () => defineScaffold({ appId: 'x', displayName: 'X', economics: { platformCommissionBps: 1500 }, actions: [] }),
     /platformCommissionBps must be 0/
   );
 
-  // Rejects prompt-injected identity fields
   assert.throws(
     () =>
       defineScaffold({
@@ -189,7 +198,6 @@ test('validateContracts enforces Steward-Coop Charter, RBAC isolation, commit mo
     /input\.properties\.tenant_id is forbidden/
   );
 
-  // Rejects exposing internal dataClass on public A2A card
   assert.throws(
     () =>
       defineScaffold({
@@ -257,7 +265,6 @@ test('emitSwiftAppIntents emits AppEntity, AppEnum, @AppIntent(.tool), requestCo
   assert.match(swiftSource, /enum CompCheckItemReasonCodeAppEnum: String, AppEnum/);
   assert.match(swiftSource, /@AppIntent\(\.tool\)\nstruct CompCheckItemIntent: AppIntent/);
   assert.match(swiftSource, /try await requestConfirmation/);
-  // Dual-custody TransferReserveFundsIntent must NOT carry @AppIntent(.tool)
   assert.doesNotMatch(swiftSource, /@AppIntent\(\.tool\)\nstruct TransferReserveFundsIntent/);
   assert.match(swiftSource, /struct TransferReserveFundsIntent: AppIntent/);
   assert.match(skillMarkdown, /open-restaurant-siri-skill/);
@@ -277,4 +284,145 @@ test('emitKotlinAppFunctions emits @RequiresApi(36) Jetpack service, KDoc Serial
 test('compileScaffold returns all 5 target outputs in a single deterministic pass', () => {
   const bundle = compileScaffold(createFixtureScaffold());
   assert.ok(bundle.voice && bundle.mcp && bundle.a2a && bundle.swiftAppIntents && bundle.kotlinAppFunctions);
+});
+
+test('rollout-compiler-fleet synthesizes valid 4-tier contracts for built-in and dynamic Open* verticals', () => {
+  const la = buildStarterScaffoldObject('OpenLandscapeArchitect');
+  assert.equal(la.appId, 'open-landscape-architect');
+  assert.equal(la.actions.length, 4);
+  assert.equal(compileScaffold(la).a2a.publicAgentCard.skills.length, 1);
+
+  const hoa = buildStarterScaffoldObject('OpenHOA');
+  const hoaRelease = hoa.actions.find((a) => a.id === 'hoa.approve_ledger_adjustment');
+  assert.equal(hoaRelease.governance.commitMode, 'queue_peer_accept');
+  assert.deepEqual(hoaRelease.ledger.books, ['gaap', 'trust', 'fund']);
+
+  const dentist = buildStarterScaffoldObject('OpenDentist');
+  const dentistPulse = dentist.actions.find((a) => a.id === 'dentist.get_operational_pulse');
+  assert.equal(dentistPulse.governance.dataClass, 'restricted');
+  assert.equal(compileScaffold(dentist).voice.tools[0].zdrRequired, true);
+
+  // Arbitrary 50+ fleet synthesis (e.g. OpenVetClinic)
+  const vet = buildStarterScaffoldObject('OpenVetClinic');
+  assert.equal(vet.appId, 'open-vet-clinic');
+  assert.equal(vet.actions[0].id, 'vet_clinic.get_operational_pulse');
+  assert.ok(compileScaffold(vet).mcp.mcpManifest.tools.length === 4);
+});
+
+test('rollout-compiler-fleet discovers fleet repos, skips OpenRestaurant by default, and stamps 5 targets + Express routes end to end', async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'osl-compiler-rollout-'));
+  try {
+    // 1. Flagship OpenRestaurant (should skip without --force)
+    fs.mkdirSync(path.join(tmpRoot, 'OpenRestaurant', 'server', 'src'), { recursive: true });
+    // 2. Infrastructure package (openscaffold-* should be ignored by app scanner)
+    fs.mkdirSync(path.join(tmpRoot, 'openscaffold-voice', 'src'), { recursive: true });
+    // 3. Target sibling vertical: OpenLandscapeArchitect
+    const laDir = path.join(tmpRoot, 'OpenLandscapeArchitect');
+    fs.mkdirSync(path.join(laDir, 'server', 'src'), { recursive: true });
+    fs.mkdirSync(path.join(laDir, 'client', 'src'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(laDir, 'package.json'),
+      JSON.stringify({ name: 'open-landscape-architect', version: '1.0.0', private: true }, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(laDir, 'server', 'src', 'index.js'),
+      [
+        "const express = require('express');",
+        'const app = express();',
+        'function authMiddleware(req, _res, next) { next(); }',
+        "app.get('/api/health', (_req, res) => {",
+        '  res.json({',
+        '    status: "ok",',
+        '    voiceVersion: "1.0.0",',
+        '  });',
+        '});',
+        'module.exports = app;',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(laDir, 'vercel.json'),
+      JSON.stringify(
+        {
+          version: 2,
+          builds: [{ src: 'api/index.js', use: '@vercel/node', config: { includeFiles: ['server/migrations/**'] } }],
+          routes: [{ handle: 'filesystem' }, { src: '/(.*)', dest: '/index.html' }],
+        },
+        null,
+        2
+      )
+    );
+
+    const discovered = discoverTargetRepos(tmpRoot).map((p) => path.basename(p)).sort();
+    assert.deepEqual(discovered, ['OpenLandscapeArchitect', 'OpenRestaurant']);
+
+    // Dry-run across fleet
+    const drySummary = await runFleetRolloutCli([tmpRoot, '--dry-run']);
+    assert.equal(drySummary.count, 2);
+    const orRes = drySummary.results.find((r) => r.repo === 'OpenRestaurant');
+    const laDry = drySummary.results.find((r) => r.repo === 'OpenLandscapeArchitect');
+    assert.match(orRes.status, /skipped/);
+    assert.equal(laDry.status, 'dry-run');
+    assert.equal(laDry.domain, 'landscape_arch');
+
+    // Full install on OpenLandscapeArchitect (without sibling guild copy so test stays self-contained)
+    const wired = await installCompilerIntoRepo(laDir, { withGuild: false });
+    assert.equal(wired.status, 'wired');
+    assert.equal(wired.actionCount, 4);
+
+    // Verify all 9 generated artifacts exist on disk
+    for (const rel of [
+      'scaffold.config.js',
+      'packages/openscaffold-compiler/package.json',
+      'generated/voice.actions.json',
+      'generated/mcp.tools.json',
+      'generated/windows-odr.manifest.json',
+      'generated/a2a.agent-card.public.json',
+      'generated/a2a.agent-card.authenticated.json',
+      'generated/ios/OpenLandscapeArchitectIntents.swift',
+      'generated/ios/SKILL.md',
+      'generated/android/OpenLandscapeArchitectAppFunctionService.kt',
+      'generated/android/open_landscape_architect_app_functions.xml',
+      'server/src/services/openscaffold-compiler.js',
+      'server/src/routes/action-surfaces.js',
+    ]) {
+      assert.equal(fs.existsSync(path.join(laDir, rel)), true, `Expected ${rel} to exist`);
+    }
+
+    // Verify server/src/index.js and vercel.json were patched cleanly & idempotently
+    const patchedServer = fs.readFileSync(path.join(laDir, 'server', 'src', 'index.js'), 'utf8');
+    assert.match(patchedServer, /app\.get\('\/\.well-known\/agent\.json'/);
+    assert.match(patchedServer, /app\.use\('\/mcp'/);
+    assert.match(patchedServer, /compilerVersion:\s*"1\.0\.0"/);
+
+    const patchedVercel = JSON.parse(fs.readFileSync(path.join(laDir, 'vercel.json'), 'utf8'));
+    assert.ok(patchedVercel.routes.some((r) => r.src === '/.well-known/agent.json'));
+    assert.ok(patchedVercel.builds[0].config.includeFiles.includes('generated/**'));
+
+    // Re-running is idempotent (no duplicate mounts)
+    await installCompilerIntoRepo(laDir, { withGuild: false });
+    const patchedServer2 = fs.readFileSync(path.join(laDir, 'server', 'src', 'index.js'), 'utf8');
+    assert.equal(patchedServer2, patchedServer);
+
+    // Load generated scaffold.config.js dynamically and execute through createActionRuntime
+    const loadedMod = await import(pathToFileURL(path.join(laDir, 'scaffold.config.js')).href);
+    const loadedScaffold = loadedMod.default ?? loadedMod;
+    const rt = createActionRuntime(loadedScaffold, {
+      'landscape_arch.get_operational_pulse': async () => ({ status: 'online', active_items: 4 }),
+      'landscape_arch.request_direct_booking': async () => ({ booking_ref: 'BKG-1', status: 'confirmed' }),
+      'landscape_arch.log_station_milestone': async () => ({ status: 'logged' }),
+      'landscape_arch.approve_ledger_adjustment': async () => ({ amount_cents: 5000, status: 'committed' }),
+    });
+
+    const pulseOut = await rt.executeActionEnvelope({
+      contractId: 'landscape_arch.get_operational_pulse',
+      surface: 'mcp',
+      context: { actorId: '1', badgeRole: 'principal_architect' },
+      input: { window: 'today' },
+    });
+    assert.equal(pulseOut.ok, true);
+    assert.equal(pulseOut.data.active_items, 4);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });

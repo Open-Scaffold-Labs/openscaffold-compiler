@@ -1,20 +1,24 @@
 {
   "name": "@openscaffold/compiler",
   "version": "1.0.0",
-  "description": "Zero-dependency declarative Action Contract compiler for Open Scaffold Labs (@openscaffold/voice, MCP, A2A, Apple App Intents, Android AppFunctions).",
+  "description": "Zero-dependency declarative Action Contract compiler & 50-app fleet rollout CLI for Open Scaffold Labs (@openscaffold/voice, MCP, A2A, Apple App Intents, Android AppFunctions).",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./rollout": "./bin/rollout-compiler-fleet.mjs"
   },
   "bin": {
-    "openscaffold-compile": "./bin/compile-actions.mjs"
+    "openscaffold-compile": "./bin/compile-actions.mjs",
+    "openscaffold-compiler-rollout": "./bin/rollout-compiler-fleet.mjs"
   },
   "scripts": {
-    "test": "node --test test/compiler.test.js"
+    "test": "node --test test/compiler.test.js",
+    "rollout": "node ./bin/rollout-compiler-fleet.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
   },
+  "author": "Open Scaffold Labs LLC",
   "license": "MIT"
 }

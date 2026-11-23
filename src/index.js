@@ -36,7 +36,7 @@ export {
   emitKotlinAppFunctions,
   emitKotlinAppFunctions as compileToKotlinAppFunctions,
 } from './emitKotlinAppFunctions.js';
-export { createActionRuntime } from './executeActionEnvelope.js';
+export { createActionRuntime, LEDGER_GENESIS_PREV_HASH } from './executeActionEnvelope.js';
 
 import { validateContracts } from './validateContracts.js';
 import { emitVoice } from './emitVoice.js';

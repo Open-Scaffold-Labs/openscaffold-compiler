@@ -11,6 +11,9 @@ function sha256Hex(payload) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
+/** First-entry prevHash sentinel. Must not contain a 13–19 digit run (STD-49). */
+export const LEDGER_GENESIS_PREV_HASH = 'GENESIS_NONE';
+
 export function createActionRuntime(scaffold, handlers = {}, options = {}) {
   const actionsById = new Map(scaffold.actions.map((a) => [a.id, a]));
   const stagedActions = new Map();
@@ -72,7 +75,7 @@ export function createActionRuntime(scaffold, handlers = {}, options = {}) {
 
     for (const book of action.ledger.books) {
       const chain = ledgerChainByBook[book];
-      const prevHash = chain.length > 0 ? chain[chain.length - 1].entryHash : 'GENESIS_0000000000000000';
+      const prevHash = chain.length > 0 ? chain[chain.length - 1].entryHash : LEDGER_GENESIS_PREV_HASH;
       const entryCore = {
         book,
         seq: chain.length + 1,

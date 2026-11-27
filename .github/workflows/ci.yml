@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Zero-dependency package: no lockfile and no install step. There is
+      # no lint or typecheck script. The compile steps below are the build.
+      - run: npm test
+      - name: Compile example contracts
+        run: |
+          node ./bin/compile-actions.mjs --config ./examples/open-restaurant/scaffold.config.js --out /tmp/generated-open-restaurant
+          node ./bin/compile-actions.mjs --config ./examples/open-hoa/scaffold.config.js --out /tmp/generated-open-hoa
